@@ -1,0 +1,15 @@
+.env
+.env.local
+*.pem
+*.key
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+node_modules/
+dist/
+build/
+.DS_Store
+*.log
+terraform/terraform.tfvars
+ansible/inventory.ini

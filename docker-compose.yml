@@ -1,0 +1,116 @@
+version: "3.9"
+
+# Obrazy są budowane przez GitHub Actions i pushowane do GHCR.
+# Serwer EC2 tylko pobiera gotowe obrazy — zero budowania na maszynie.
+# Zmienna GHCR_OWNER musi być ustawiona w .env (twój GitHub login/org).
+
+services:
+
+  api:
+    image: ghcr.io/${GHCR_OWNER}/infractrl-api:latest
+    container_name: infractrl-api
+    ports:
+      - "${PORT_API:-8000}:8000"
+    volumes:
+      - api-data:/data
+    environment:
+      - DB_PATH=/data/orders.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  client-a:
+    image: ghcr.io/${GHCR_OWNER}/infractrl-client-a:latest
+    container_name: infractrl-client-a
+    ports:
+      - "${PORT_CLIENT_A:-3001}:80"
+    depends_on: [api]
+    restart: unless-stopped
+
+  client-b:
+    image: ghcr.io/${GHCR_OWNER}/infractrl-client-b:latest
+    container_name: infractrl-client-b
+    ports:
+      - "${PORT_CLIENT_B:-3002}:80"
+    depends_on: [api]
+    restart: unless-stopped
+
+  admin:
+    image: ghcr.io/${GHCR_OWNER}/infractrl-admin:latest
+    container_name: infractrl-admin
+    ports:
+      - "${PORT_ADMIN:-3003}:80"
+    depends_on: [api]
+    restart: unless-stopped
+
+  production:
+    image: ghcr.io/${GHCR_OWNER}/infractrl-production:latest
+    container_name: infractrl-production
+    ports:
+      - "${PORT_PRODUCTION:-3004}:80"
+    depends_on: [api]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: infractrl-prometheus
+    ports:
+      - "${PORT_PROMETHEUS:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}"
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.5
+    container_name: infractrl-loki
+    ports:
+      - "${PORT_LOKI:-3100}:3100"
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.5
+    container_name: infractrl-promtail
+    user: root
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on: [loki]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: infractrl-grafana
+    ports:
+      - "${PORT_GRAFANA:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on: [prometheus, loki]
+    restart: unless-stopped
+
+volumes:
+  api-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:

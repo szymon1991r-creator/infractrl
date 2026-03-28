@@ -1,0 +1,110 @@
+name: Build & Push Images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:          # możliwość ręcznego uruchomienia z GitHub UI
+
+env:
+  REGISTRY: ghcr.io
+  # np. ghcr.io/twoj-github-login/infractrl
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/infractrl
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write           # pozwolenie na push do GHCR
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── backend ──────────────────────────────────────────────
+      - name: Build & push — backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}-api:latest
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      # ── client-a ─────────────────────────────────────────────
+      - name: Build & push — client-a
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/client-a
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}-client-a:latest
+          build-args: |
+            CLIENT_ID=A
+            ACCENT_COLOR=#0ea5e9
+            REGION_LABEL=EU-WEST-1
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      # ── client-b ─────────────────────────────────────────────
+      - name: Build & push — client-b
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/client-b
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}-client-b:latest
+          build-args: |
+            CLIENT_ID=B
+            ACCENT_COLOR=#8b5cf6
+            REGION_LABEL=EU-CENTRAL-1
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      # ── admin ────────────────────────────────────────────────
+      - name: Build & push — admin
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/admin
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}-admin:latest
+          build-args: |
+            CLIENT_ID=ADMIN
+            ACCENT_COLOR=#f59e0b
+            REGION_LABEL=EU-WEST-1
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      # ── production ───────────────────────────────────────────
+      - name: Build & push — production
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/production
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}-production:latest
+          build-args: |
+            CLIENT_ID=PROD
+            ACCENT_COLOR=#10b981
+            REGION_LABEL=PRODUCTION
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### ✅ Images pushed to GHCR" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.IMAGE_PREFIX }}-api\` | \`latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.IMAGE_PREFIX }}-client-a\` | \`latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.IMAGE_PREFIX }}-client-b\` | \`latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.IMAGE_PREFIX }}-admin\` | \`latest\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`${{ env.IMAGE_PREFIX }}-production\` | \`latest\` |" >> $GITHUB_STEP_SUMMARY

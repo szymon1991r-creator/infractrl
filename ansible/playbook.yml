@@ -1,0 +1,174 @@
+---
+- name: Deploy InfraCtrl Orders
+  hosts: infractrl
+  become: yes
+  vars:
+    app_dir: /opt/infractrl
+
+  tasks:
+
+    - name: Wait for cloud-init to finish
+      wait_for:
+        path: /var/lib/cloud/instance/boot-finished
+        state: present
+        timeout: 600
+
+    - name: Wait for Docker socket
+      wait_for:
+        path: /var/run/docker.sock
+        state: present
+        timeout: 120
+
+    - name: Wait for Docker daemon
+      shell: docker ps > /dev/null 2>&1
+      register: docker_check
+      until: docker_check is succeeded
+      retries: 30
+      delay: 5
+
+    - name: Check docker-compose
+      command: docker-compose --version
+      register: compose_ver
+      ignore_errors: yes
+
+    - name: Install docker-compose if missing
+      shell: |
+        curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+          -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+      when: compose_ver.failed
+
+    - name: Create app directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: ec2-user
+        group: ec2-user
+        mode: "0755"
+
+    - name: Sync project files
+      synchronize:
+        src:  "{{ playbook_dir }}/../"
+        dest: "{{ app_dir }}/"
+        delete: yes
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.gitignore"
+          - "--exclude=node_modules"
+          - "--exclude=dist"
+          - "--exclude=build"
+          - "--exclude=.terraform"
+          - "--exclude=*.tfstate"
+          - "--exclude=*.tfstate.backup"
+          - "--exclude=.terraform.lock.hcl"
+          - "--exclude=*.pem"
+          - "--exclude=.env"
+          - "--exclude=ansible/inventory.ini"
+
+    - name: Copy .env to server
+      copy:
+        src: "{{ playbook_dir }}/../.env"
+        dest: "{{ app_dir }}/.env"
+        owner: ec2-user
+        group: ec2-user
+        mode: "0600"
+
+    - name: Set file ownership
+      file:
+        path: "{{ app_dir }}"
+        owner: ec2-user
+        group: ec2-user
+        recurse: yes
+
+    # ── Logowanie do GHCR ────────────────────────────────────────
+    - name: Log in to GHCR
+      shell: |
+        echo "{{ ghcr_token }}" | docker login ghcr.io -u "{{ ghcr_owner }}" --password-stdin
+      no_log: true
+
+    # ── Pull gotowych obrazów ─────────────────────────────────────
+    - name: Pull all images from GHCR
+      shell: docker-compose pull
+      args:
+        chdir: "{{ app_dir }}"
+      environment:
+        GHCR_OWNER: "{{ ghcr_owner }}"
+      register: pull_out
+
+    - name: Show pull output
+      debug:
+        msg: "{{ pull_out.stdout_lines }}"
+
+    # ── Zatrzymaj stare kontenery ─────────────────────────────────
+    - name: Stop existing containers
+      shell: docker-compose down --remove-orphans 2>/dev/null || true
+      args:
+        chdir: "{{ app_dir }}"
+      ignore_errors: yes
+
+    # ── Uruchom z gotowymi obrazami ───────────────────────────────
+    - name: Start containers (no build)
+      shell: docker-compose up -d
+      args:
+        chdir: "{{ app_dir }}"
+      environment:
+        GHCR_OWNER: "{{ ghcr_owner }}"
+      register: up_out
+
+    - name: Show startup output
+      debug:
+        msg: "{{ up_out.stdout_lines }}"
+
+    # ── Systemd service ───────────────────────────────────────────
+    - name: Install startup service
+      copy:
+        dest: /etc/systemd/system/infractrl.service
+        content: |
+          [Unit]
+          Description=InfraCtrl Orders
+          Requires=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=/opt/infractrl
+          EnvironmentFile=/opt/infractrl/.env
+          ExecStart=/usr/local/bin/docker-compose up -d
+          ExecStop=/usr/local/bin/docker-compose down
+          TimeoutStartSec=120
+          User=root
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable startup service
+      systemd:
+        name: infractrl
+        enabled: yes
+        daemon_reload: yes
+
+    # ── Poczekaj na API ───────────────────────────────────────────
+    - name: Wait for API to become healthy (up to 3 min)
+      shell: curl -sf http://localhost:8000/health
+      register: health
+      until: health.rc == 0
+      retries: 18
+      delay: 10
+      ignore_errors: yes
+
+    - name: Show warning if API not ready
+      debug:
+        msg: "API nie odpowiedział — sprawdź: docker-compose logs api"
+      when: health.rc is defined and health.rc != 0
+
+    - name: Container status
+      shell: docker-compose ps
+      args:
+        chdir: "{{ app_dir }}"
+      register: ps_out
+      changed_when: false
+
+    - name: Show container status
+      debug:
+        msg: "{{ ps_out.stdout_lines }}"
