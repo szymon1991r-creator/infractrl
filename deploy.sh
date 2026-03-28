@@ -46,36 +46,6 @@ KEY_FILE="${AWS_KEY_FILE:-$HOME/.ssh/${AWS_KEY_NAME}.pem}"
 chmod 400 "$KEY_FILE"
 ok "SSH key: $KEY_FILE"
 
-# ── Sprawdź czy obrazy GHCR istnieją ─────────────────────────
-step "[0/4] Checking GHCR images"
-
-IMAGES=(
-  "infractrl-api"
-  "infractrl-client-a"
-  "infractrl-client-b"
-  "infractrl-admin"
-  "infractrl-production"
-)
-
-MISSING=0
-for img in "${IMAGES[@]}"; do
-  STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-    -u "${GHCR_OWNER}:${GHCR_TOKEN}" \
-    "https://ghcr.io/v2/${GHCR_OWNER}/${img}/manifests/latest" 2>/dev/null || echo "000")
-  if [ "$STATUS" = "200" ]; then
-    ok "ghcr.io/${GHCR_OWNER}/${img}:latest"
-  else
-    warn "ghcr.io/${GHCR_OWNER}/${img}:latest — NOT FOUND (status: $STATUS)"
-    MISSING=$((MISSING + 1))
-  fi
-done
-
-if [ $MISSING -gt 0 ]; then
-  echo ""
-  err "$MISSING obraz(ów) nie znaleziono w GHCR. Wypchnij kod do gałęzi 'main' i poczekaj aż GitHub Actions skończy build."
-fi
-ok "All images available in GHCR"
-
 # ── Krok 1: Terraform ─────────────────────────────────────────
 step "[1/4] Terraform — provisioning AWS infrastructure"
 
